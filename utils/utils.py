@@ -396,6 +396,24 @@ def load_model(data_args, model_args, training_args, tokenizer, logger):
         model.config.torch_dtype= torch.bfloat16
         model.enable_input_require_grads()
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, gradient_checkpointing_kwargs={"use_reentrant":False})
+        
+        if model_args.peft_model_id:
+            model = PeftModel.from_pretrained(model, model_args.peft_model_id)
+            ## If still need to fine-tune
+            for name, param in model.named_parameters():
+                if "lora_A" in name or "lora_B" in name:
+                    param.requires_grad = True
+        else:
+            modules = find_all_linear_names(model)
+            config = LoraConfig(
+                r=model_args.lora_rank,
+                lora_alpha=16,
+                target_modules=modules,
+                lora_dropout=0.1,
+                bias="none",
+                task_type="CAUSAL_LM",
+            )
+            model = get_peft_model(model, config)
         print_trainable_parameters(model)
 
         for name, module in model.named_modules():
@@ -410,7 +428,7 @@ def load_model(data_args, model_args, training_args, tokenizer, logger):
                     if module.weight.dtype == torch.float32:
                         module = module.to(torch.bfloat16)
                         
-    activate_embbed(model)
+    #activate_embbed(model)
     model.config.pad_token_id = 2
     model.config.bos_token_id = 1
     model.config.eos_token_id = 32000

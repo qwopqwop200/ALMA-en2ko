@@ -178,8 +178,8 @@ def main():
 
         trainer.save_state()
         if model_args.use_peft:
-            #model.save_pretrained(training_args.output_dir)
-            trainer.save_model()
+            model.save_pretrained(training_args.output_dir)
+            #trainer.save_model()
         else:
             trainer.save_model()  # Saves the tokenizer too for easy upload
     # Prediction
