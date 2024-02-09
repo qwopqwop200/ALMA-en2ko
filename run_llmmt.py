@@ -145,12 +145,17 @@ def main():
             with open(pair_shot_path) as f:
                 shots_eval_dict[lg_pair] = json.load(f)
 
-    train_datasets, eval_datasets, test_datasets = get_preprocessed_data(train_raw_data, valid_raw_data, test_raw_data, pairs, tokenizer, shots_eval_dict, data_args, training_args, model_args)
-    metric = evaluate.load("sacrebleu")
-
     # Load model
     model = load_model(data_args, model_args, training_args, tokenizer, logger)
     collate_fn = DataCollatorForUL2(model, tokenizer) if data_args.use_ul2 else default_data_collator
+    
+    if not os.path.isfile('./dataset.pth'):
+        train_datasets, eval_datasets, test_datasets = get_preprocessed_data(train_raw_data, valid_raw_data, test_raw_data, pairs, tokenizer, shots_eval_dict, data_args, training_args, model_args)
+        torch.save([train_datasets, eval_datasets, test_datasets], './dataset.pth')
+    else:
+        train_datasets, eval_datasets, test_datasets = torch.load('./dataset.pth')
+    
+    metric = evaluate.load("sacrebleu")
     
     # Initialize our Trainer
     trainer = LlmmtTrainer(
@@ -173,7 +178,8 @@ def main():
 
         trainer.save_state()
         if model_args.use_peft:
-            model.save_pretrained(training_args.output_dir) 
+            #model.save_pretrained(training_args.output_dir)
+            trainer.save_model()
         else:
             trainer.save_model()  # Saves the tokenizer too for easy upload
     # Prediction

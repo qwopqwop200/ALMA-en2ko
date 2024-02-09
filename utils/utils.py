@@ -26,6 +26,7 @@ from transformers import (
     Trainer,
     Seq2SeqTrainer,
     TrainingArguments,
+    BitsAndBytesConfig,
     Seq2SeqTrainingArguments,
     default_data_collator,
     is_torch_tpu_available,
@@ -36,13 +37,14 @@ from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
-from peft import LoraConfig, get_peft_model, prepare_model_for_int8_training, TaskType
-from peft import PeftModel, PeftConfig
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training, TaskType, PeftModel
+from peft.tuners.lora import LoraLayer
 from collections import defaultdict
 from transformers.trainer_callback import TrainerCallback
 from datasets import concatenate_datasets
 from tqdm import tqdm
 from trl import AutoModelForCausalLMWithValueHead
+import bitsandbytes as bnb
 
 class SavePeftModelCallback(TrainerCallback):
     def on_save(
@@ -69,6 +71,7 @@ class SavePeftModelCallback(TrainerCallback):
 
 LANG_TABLE = {
     "en": "English",
+    "ko": "Korean",
     "de": "German",
     "fr": "French",
     "cs": "Czech",
@@ -87,6 +90,7 @@ LANG_TABLE = {
 ## ALMA should only use English Prompt.
 PREFIX = {
     "de": "Übersetzen Sie dies vom Englischen ins Deutsche:\nEnglisch: ",
+    "ko": "이것을 영어에서 한국어로 번역하세요:\n영어: ",
     "fr": "Traduisez ceci de l'anglais vers le français :\nAnglais: ",
     "cs": "Přeložte toto z angličtiny do češtiny:\nanglicky: ",
     "is": "Þýddu þetta úr ensku yfir á íslensku:\nEnska: ",
@@ -99,6 +103,7 @@ PREFIX = {
 
 SUFFIX = {
     "en": "\nEnglish:",
+    "ko": "\n한국어:",
     "de": "\nDeutsch:",
     "fr": "\nFrançais :",
     "cs": "\nčesky:",
@@ -260,10 +265,25 @@ def print_trainable_parameters(model):
         all_param += param.numel()
         if param.requires_grad:
             trainable_params += param.numel()
+    trainable_params /= 2
     print(
-        f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}"
+        f"trainable params: {trainable_params} || "
+        f"all params: {all_param} || "
+        f"trainable: {100 * trainable_params / all_param}"
     )
 
+def activate_embbed(model):
+    def freeze_partial_embedding_hook(grad):
+        grad[:32000] = 0
+        return grad
+
+    for name, param in model.named_parameters():
+        if ("lm_head" in name or "embed_tokens" in name) and "original" not in name:
+            param.requires_grad = True
+            if "embed_tokens" in name:
+                param.register_hook(freeze_partial_embedding_hook)
+        else:
+            param.requires_grad = False
 
 def clean_outputstring(output, key_word, logger, split_idx):
     try:
@@ -285,6 +305,24 @@ def clean_outputstring(output, key_word, logger, split_idx):
     except:
         logger.info(f"Can not solve the edge case, recover the translation to empty string! The output is {output}")
         return ""
+
+def find_all_linear_names(model):
+    cls = bnb.nn.Linear4bit
+    lora_module_names = set()
+    for name, module in model.named_modules():
+        if isinstance(module, cls):
+            names = name.split('.')
+            lora_module_names.add(names[0] if len(names) == 1 else names[-1])
+
+
+    if 'lm_head' in lora_module_names: # needed for 16-bit
+        lora_module_names.remove('lm_head')
+    return list(lora_module_names)
+
+from accelerate import Accelerator
+
+device_index = Accelerator().process_index
+device_map = {"": device_index}
 
 def load_model(data_args, model_args, training_args, tokenizer, logger):
     # Detecting last checkpoint.
@@ -318,15 +356,10 @@ def load_model(data_args, model_args, training_args, tokenizer, logger):
 
     ## Model Loading
     if model_args.model_name_or_path:
-        torch_dtype = (
-            model_args.torch_dtype
-            if model_args.torch_dtype in ["auto", None]
-            else getattr(torch, model_args.torch_dtype)
-        )
         if model_args.multi_gpu_one_model and not training_args.do_train:
             model = AutoModelForCausalLM.from_pretrained(
                 model_args.model_name_or_path if last_checkpoint is None else last_checkpoint,
-                device_map="auto",
+                device_map=device_map,
                 low_cpu_mem_usage=model_args.low_cpu_mem_usage,
             )
         else:
@@ -337,68 +370,53 @@ def load_model(data_args, model_args, training_args, tokenizer, logger):
                 cache_dir=model_args.cache_dir,
                 revision=model_args.model_revision,
                 use_auth_token=True if model_args.use_auth_token else None,
-                torch_dtype=torch_dtype,
                 low_cpu_mem_usage=model_args.low_cpu_mem_usage,
+                load_in_4bit=True,
+                device_map=device_map,
+                torch_dtype=torch.bfloat16,
+                quantization_config=BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.bfloat16,
+                    bnb_4bit_use_double_quant=True,
+                    bnb_4bit_quant_type='nf4'
+                ),
                 trust_remote_code=True,
+                use_flash_attention_2=True,
             )
-        model.generation_config.max_length = data_args.max_source_length + data_args.max_new_tokens
+        model.generation_config.max_length = 4096
         model.generation_config.use_cache = True
     else:
         model = AutoModelForCausalLM.from_config(config)
         n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
         logger.info(f"Training new model from scratch - Total size={n_params/2**20:.2f}M params")
 
-    # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
-    # on a small vocab and want a smaller embedding size, remove this test.
-    embedding_size = model.get_input_embeddings().weight.shape[0]
-    if len(tokenizer) > embedding_size:
-        model.resize_token_embeddings(len(tokenizer))
-
     if model_args.use_peft:
-        if model_args.peft_model_id:
-            model = PeftModel.from_pretrained(model, model_args.peft_model_id)
-            ## If still need to fine-tune
-            for name, param in model.named_parameters():
-                if "lora_A" in name or "lora_B" in name:
-                    param.requires_grad = True
-        else:
-            config = LoraConfig(
-                r=model_args.lora_rank,
-                lora_alpha=model_args.lora_rank * 2,
-                target_modules=["down_proj"],
-                lora_dropout=0.05,
-                bias="none",
-                task_type="CAUSAL_LM"
-            )
-            model = get_peft_model(model, config)
+        setattr(model, 'model_parallel', True)
+        setattr(model, 'is_parallelizable', True)
+        model.config.torch_dtype= torch.bfloat16
+        model.enable_input_require_grads()
+        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, gradient_checkpointing_kwargs={"use_reentrant":False})
         print_trainable_parameters(model)
 
-    if "llama" in model_args.model_name_or_path:
-        model.config.pad_token_id = 0
-        model.config.bos_token_id = 1
-        model.config.eos_token_id = 2
-        model.generation_config.pad_token_id = 0
-        model.generation_config.bos_token_id = 1
-        model.generation_config.eos_token_id = 2
-    elif "BigTranslate" in model_args.model_name_or_path:
-        model.config.pad_token_id = 2
-        model.config.bos_token_id = 1
-        model.config.eos_token_id = 2
-        model.generation_config.pad_token_id = 2
-        model.generation_config.bos_token_id = 1
-        model.generation_config.eos_token_id = 2 
-    elif "mpt" in model_args.model_name_or_path:
-        model.config.pad_token_id = 1
-        model.config.bos_token_id = 0
-        model.config.eos_token_id = 0
-        model.generation_config.pad_token_id = 1
-        model.generation_config.bos_token_id = 0
-        model.generation_config.eos_token_id = 0
-        for name, param in model.named_parameters():
-            # To be compatible with AMD cards
-            if "norm" in name:
-                param.requires_grad = False
-        
+        for name, module in model.named_modules():
+            if isinstance(module, LoraLayer):
+                module = module.to(torch.bfloat16)
+                
+            if 'norm' in name:
+                module = module.to(torch.float32)
+                
+            if 'lm_head' in name or 'embed_tokens' in name:
+                if hasattr(module, 'weight'):
+                    if module.weight.dtype == torch.float32:
+                        module = module.to(torch.bfloat16)
+                        
+    activate_embbed(model)
+    model.config.pad_token_id = 2
+    model.config.bos_token_id = 1
+    model.config.eos_token_id = 32000
+    model.generation_config.pad_token_id = 2
+    model.generation_config.bos_token_id = 1
+    model.generation_config.eos_token_id = 32000
     return model
 
 def load_tokenizer(data_args, model_args, training_args, logger):
@@ -429,21 +447,6 @@ def load_tokenizer(data_args, model_args, training_args, logger):
             "You are instantiating a new tokenizer from scratch. This is not supported by this script."
             "You can do it from another script, save it, and load it from here, using --tokenizer_name."
         )
-
-    if "llama" in model_args.model_name_or_path:
-        tokenizer.pad_token_id = 0
-        tokenizer.bos_token_id = 1
-        tokenizer.eos_token_id = 2
-        tokenizer.eos_token = "</s>"
-        tokenizer.bos_token = "<s>"
-    elif "Mistral" in model_args.model_name_or_path:
-        tokenizer.pad_token_id = 0
-    elif "mpt" in model_args.model_name_or_path:
-        tokenizer.pad_token_id = 1
-        tokenizer.bos_token_id = 0
-        tokenizer.eos_token_id = 0
-        tokenizer.pad_token = "<|padding|>"
-
     return tokenizer
 
 def get_preprocessed_data(train_raw_data, valid_raw_data, test_raw_data, pairs, tokenizer, shots_eval_dict, data_args, training_args, model_args):

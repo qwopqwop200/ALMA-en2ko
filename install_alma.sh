@@ -1,5 +1,5 @@
 pip install git+https://github.com/fe1ixxu/ALMA.git@alma-r-hf
-pip install peft==0.5.0
+pip install peft
 pip install sentencepiece
 pip install sacrebleu
 pip install ipython
@@ -14,3 +14,5 @@ pip install accelerate==0.24.0
 pip install jsonlines
 pip install git+https://github.com/fe1ixxu/ALMA.git@alma-r-trl
 pip install unbabel-comet
+pip install flash-attn
+pip install bitsandbytes
