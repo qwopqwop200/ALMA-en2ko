@@ -10,7 +10,7 @@ port=$(( RANDOM % (50000 - 30000 + 1 ) + 30000 ))
 
 accelerate launch --main_process_port ${port} --config_file configs/deepspeed_train_config_bf16.yaml \
     run_llmmt.py \
-    --model_name_or_path yanolja/KoSOLAR-10.7B-v0.2 \
+    --model_name_or_path yanolja/EEVE-Korean-Instruct-10.8B-v1.0 \
     --mmt_data_path  ./human_written_data/ \
     --use_peft \
     --lora_rank ${LORA_RANK} \
@@ -32,9 +32,9 @@ accelerate launch --main_process_port ${port} --config_file configs/deepspeed_tr
     --per_device_train_batch_size 3 \
     --per_device_eval_batch_size 3 \
     --evaluation_strategy steps \
-    --eval_steps 0.05 \
+    --eval_steps 378 \
     --save_strategy steps \
-    --save_steps 0.05 \
+    --save_steps 378 \
     --save_total_limit 1 \
     --logging_strategy steps \
     --logging_steps 0.05 \

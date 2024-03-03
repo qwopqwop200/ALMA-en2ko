@@ -272,19 +272,6 @@ def print_trainable_parameters(model):
         f"trainable: {100 * trainable_params / all_param}"
     )
 
-def activate_embbed(model):
-    def freeze_partial_embedding_hook(grad):
-        grad[:32000] = 0
-        return grad
-
-    for name, param in model.named_parameters():
-        if ("lm_head" in name or "embed_tokens" in name) and "original" not in name:
-            param.requires_grad = True
-            if "embed_tokens" in name:
-                param.register_hook(freeze_partial_embedding_hook)
-        else:
-            param.requires_grad = False
-
 def clean_outputstring(output, key_word, logger, split_idx):
     try:
         out = output.split(key_word)[split_idx].split("\n")
@@ -428,7 +415,6 @@ def load_model(data_args, model_args, training_args, tokenizer, logger):
                     if module.weight.dtype == torch.float32:
                         module = module.to(torch.bfloat16)
                         
-    #activate_embbed(model)
     model.config.pad_token_id = 2
     model.config.bos_token_id = 1
     model.config.eos_token_id = 32000
