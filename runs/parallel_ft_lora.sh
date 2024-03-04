@@ -10,7 +10,7 @@ port=$(( RANDOM % (50000 - 30000 + 1 ) + 30000 ))
 
 accelerate launch --main_process_port ${port} --config_file configs/deepspeed_train_config_bf16.yaml \
     run_llmmt.py \
-    --model_name_or_path yanolja/EEVE-Korean-Instruct-10.8B-v1.0 \
+    --model_name_or_path yanolja/EEVE-Korean-10.8B-v1.0 \
     --mmt_data_path  ./human_written_data/ \
     --use_peft \
     --lora_rank ${LORA_RANK} \
