@@ -32,9 +32,9 @@ accelerate launch --main_process_port ${port} --config_file configs/deepspeed_tr
     --per_device_train_batch_size 3 \
     --per_device_eval_batch_size 3 \
     --evaluation_strategy steps \
-    --eval_steps 378 \
+    --eval_steps 379 \
     --save_strategy steps \
-    --save_steps 378 \
+    --save_steps 379 \
     --save_total_limit 1 \
     --logging_strategy steps \
     --logging_steps 0.05 \
