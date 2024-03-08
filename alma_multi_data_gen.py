@@ -7,7 +7,7 @@ from accelerate import Accelerator
 from accelerate.utils import gather_object
 
 model_path = 'yanolja/EEVE-Korean-10.8B-v1.0'
-lora_path = './adapter_model-379/'
+lora_path = 'qwopqwop/ALMA-EEVE-v1'
 
 accelerator = Accelerator()
 bnb_config = BitsAndBytesConfig(load_in_4bit=True,bnb_4bit_quant_type="nf4",bnb_4bit_compute_dtype=torch.float16,)
