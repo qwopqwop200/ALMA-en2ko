@@ -34,7 +34,7 @@ for i in range(len(data_mt['ko'])):
     if os.path.exists(f'{result_path}{i}.pkl'):
         print(f"Skipping {i}")
     else:
-        prompts_all.append([i, data_mt['en'][i],data_mt['ko'][i]])
+        prompts_all.append([i, data_mt['en'][i],data_mt['ko'][i].replace('\u200b', '')])
 
 accelerator.wait_for_everyone()
 with accelerator.split_between_processes(prompts_all) as prompts:
