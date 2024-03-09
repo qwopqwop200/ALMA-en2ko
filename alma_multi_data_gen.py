@@ -31,7 +31,10 @@ model.eval()
 data_mt = joblib.load('./data_mt.pkl')
 prompts_all = []
 for i in range(len(data_mt['ko'])):
-    prompts_all.append([i, data_mt['en'][i],data_mt['ko'][i]])
+    if os.path.exists(f'{result_path}{i}.pkl'):
+        print(f"Skipping {index}")
+    else:
+        prompts_all.append([i, data_mt['en'][i],data_mt['ko'][i]])
 
 accelerator.wait_for_everyone()
 with accelerator.split_between_processes(prompts_all) as prompts:
