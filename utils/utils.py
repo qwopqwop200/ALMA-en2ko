@@ -178,23 +178,6 @@ def load_mmt_dataset(pairs, data_args, model_args, training_args, logger):
 
     return train_raw_data, valid_raw_data, test_raw_data
 
-def load_a_single_text_file(pairs, data_args, model_args):
-    assert len(pairs) == 1, "Specific translation text source file only needs one translation direction!"
-    src_lang, tgt_lang = list(pairs)[0].split("-")
-    test_raw_data = {}
-    pair = f"{src_lang}-{tgt_lang}"
-    test_raw_data[pair] = load_dataset(
-        'text',
-        data_files={"test": data_args.text_test_file},
-        cache_dir=model_args.cache_dir,
-        use_auth_token=True if model_args.use_auth_token else None,
-        )
-    def format_features(example):
-        return {pair: {src_lang: example["text"], tgt_lang: ""}}
-
-    test_raw_data[pair] = test_raw_data[pair].map(format_features, remove_columns=["text"])
-
-    return test_raw_data
 
 def get_first_non_pad_index(input_tensor):
     input_tensor = torch.tensor(input_tensor)
@@ -402,6 +385,7 @@ def load_model(data_args, model_args, training_args, tokenizer, logger):
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True, gradient_checkpointing_kwargs={"use_reentrant":False})
         
         if model_args.peft_model_id:
+            print(model_args.peft_model_id)
             model = PeftModel.from_pretrained(model, model_args.peft_model_id)
             ## If still need to fine-tune
             for name, param in model.named_parameters():
@@ -449,9 +433,8 @@ def load_tokenizer(data_args, model_args, training_args, logger):
         "padding_side": 'left' if not data_args.right_pad else "right",
         "add_eos_token": False,
     }
-        
     if model_args.tokenizer_name:
-        tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name, **tokenizer_kwargs)
+        tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name)
     elif model_args.model_name_or_path:
         if "llama" in model_args.model_name_or_path or "BigTranslate" in model_args.model_name_or_path or "ALMA" in model_args.model_name_or_path:
             tokenizer = LlamaTokenizer.from_pretrained(
